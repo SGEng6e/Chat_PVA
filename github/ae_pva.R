@@ -1,3 +1,7 @@
+
+# Viability of an endangered songbird population is most affected by adult survival and not brood parasitism
+# SG English, A Khan, AM Bezener, M Bieber, TR Forrester, T Luszcz, K Mancuso, R McKibbin, CA Bishop
+
 ### LIBRARIES ###############################################################################################
 
 library(nimble)

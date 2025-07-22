@@ -1,0 +1,611 @@
+---
+title: "Viability of an endangered songbird population is most affected by adult survival and not brood parasitism"
+output:
+  pdf_document: null
+  keep_tex: yes
+  citation_package: natbib
+  bookdown::word_document2:
+        reference_docx: template.docx
+csl: CSE.csl
+bibliography: ./PVA.bib
+link-citations: yes
+linkcolor: black
+header-includes:
+- \usepackage{float}
+- \usepackage{siunitx}
+- \usepackage{amsfonts}
+- \usepackage{lineno}
+- \usepackage{setspace}
+---
+
+Simon G. English$^{1,2}$,
+Aalia Khan$^{3}$,
+A. Michael Bezener$^{4}$,
+Matthias Bieber$^{2,5}$,
+Timothy R. Forrester$^{6}$,
+Kristen Mancuso$^{7}$,
+Rene McKibbin$^{2}$,
+Tanya Luszcz$^{2}$,
+Christine A. Bishop$^{2}$
+
+$^1$ Department of Forest and Conservation Science, University of British Columbia, 2424 Main Mall, Vancouver BC, V6T 1Z4, Canada
+
+$^2$ Pacific Wildlife Research Centre, Environment and Climate Change Canada, 5421 Robertson Road, Delta, BC V4K 3N2, Canada
+
+$^3$ Department of Biology, Carleton University, 1125 Colonel By Dr, Ottawa ON, K1S 5B6, Canada
+
+$^4$ Okanagan Collaborative Conservation Program, Kelowna, BC, Canada
+
+$^5$ Department of Forest and Wildlife Ecology, University of Madison - Wisconsin, Madison, WI, USA
+
+$^6$ Audubon Texas, Austin, Texas, USA.
+
+$^7$ Okanagan Nation Alliance, 101-3535 Old Okanagan Highway, Westbank BC, V2T 3L7
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, include = FALSE, fig.width = 12, fig.height = 8, fig.align='center', out.width="90%")
+# knitr::knit_hooks$set(purl = knitr::hook_purl)
+library(tidyverse)
+library(ggthemes)
+library(MCMCvis)
+library(coda)
+library(IPMbook)
+# library(pander)
+library(figpatch)
+library(patchwork)
+library(prettyunits)
+library(magick)
+library(knitr)
+
+```
+
+```{r load-data}
+### LOAD DATA ##############################################################################################
+start_yr <- 2002
+end_yr <- 2021
+
+load("../Data/Output/pK/pva_chain1.rda")
+load("../Data/Output/pK/pva_chain2.rda")
+load("../Data/Output/pK/pva_chain3.rda")
+load("../Data/Output/pK/pva_chain4.rda")
+
+pva_chains <- mcmc.list(mget(ls(pattern = "pva_chain"))) ; rm(list = ls(pattern = "pva_chain\\d"))
+load("../Data/Input/ybch_con.rda")
+load("../Data/Input/ybch_dat.rda")
+
+### PROCESS DATA ###########################################################################################
+
+pva_results <- MCMCsummary(pva_chains, probs = c(0.025,0.05,0.5,0.95,0.975)) %>% 
+  rownames_to_column("Term") %>% 
+  mutate(Parameter = str_extract(Term, ".*(?=(\\[.{1,5}\\])|((?<!\\])$))"),
+         Idx = str_extract(Term, "(?<!((tem\\[\\d, )|(det\\[\\d, )|(_d\\[)|(_t\\[)))\\d{1,2}(?=\\]$)"),
+         Scenario = str_extract(Term, "(?<!((tem\\[)|(det\\[)))(?<=\\[)\\d(?=,)"),
+         Year = if_else(Parameter %in% c("Pr_ext","Pr_qext","Pr_K"),
+                        as.character(as.numeric(Idx)+2021),
+                        as.character(as.numeric(Idx)+2001)))
+
+caps <- read_csv("../Data/Analysis_ready/survival_sge.csv") %>% 
+  count(Age) %>% 
+  split(.$Age)
+
+```
+
+```{r process-data, cache=FALSE}
+
+pva_smry <- pva_results %>% 
+  select(Term, mean, sd, `5%`, `95%`, Parameter, Idx, Scenario, Year) 
+
+N <- pva_smry %>% 
+  filter(str_detect(Parameter, "^N")) %>% 
+  mutate(across(c(`5%`, `95%`), \(x) if_else(x > 1000, 1000, x)),
+         mean = if_else(mean > 1100, NA_real_, mean),
+         across(where(is.numeric), \(x) pretty_signif(x, digits = 2))) %>% 
+  split(.$Parameter) %>% 
+  map(\(x) split(x, x$Scenario))
+
+irate <- pva_smry %>% 
+  filter(str_detect(Parameter, "irate")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2)),
+         context = if_else(Year > 2020, "proj", "hist")) %>% 
+  split(.$context)
+
+phi_a <- pva_smry %>% 
+  filter(str_detect(Parameter, "phi_a")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2)),
+         context = if_else(Year > 2020, "proj", "hist")) %>% 
+  split(.$context)
+
+phi_j <- pva_smry %>% 
+  filter(str_detect(Parameter, "phi_j")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2)),
+         context = if_else(Year > 2020, "proj", "hist")) %>% 
+  split(.$context)
+
+pi <- pva_smry %>% 
+  filter(str_detect(Parameter, "^pi")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2)),
+         context = if_else(Year > 2022, "proj", "hist")) %>% 
+  split(.$context)
+
+gr <- pva_smry %>% 
+  filter(str_detect(Parameter, "((?<!annual_)gr)")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 3))) %>% 
+  split(.$Term)
+
+agr <- pva_smry %>% 
+  filter(str_detect(Parameter, "(annual_growth_rate)")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2)))
+
+dispersion <- pva_smry %>% 
+  filter(str_detect(Parameter, "(theta)|(sigma)")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2))) %>% 
+  split(.$Term)
+
+betas <- pva_smry %>% 
+  filter(str_detect(Parameter, "(beta_)")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2))) %>% 
+  mutate(Model = str_extract(Parameter, "(?<=beta_)\\w{1,4}(?=_)"),
+         Term = str_extract(Term, "(?<=_)[a-z]*$"),
+         Term = factor(Term, levels = c("par","int","ddi","pas")),
+         Variable = interaction(Model,Term, drop = T)) %>% 
+  split(.$Variable)
+
+bar <- pva_smry %>% 
+  filter(str_detect(Parameter, "(bar)")) %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2))) %>% 
+  split(.$Term)
+
+bayes <- pva_smry %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2))) %>% 
+  filter(str_detect(Parameter, "(^Bp_)|(^R_)")) %>% 
+  split(.$Term)
+
+ela <- pva_smry %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2))) %>% 
+  filter(str_detect(Parameter, "(ela)")) %>% 
+  split(.$Term)
+
+sen <- pva_smry %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2))) %>% 
+  filter(str_detect(Parameter, "(sen)")) %>% 
+  split(.$Term)
+
+det <- pva_smry %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x, digits = 2))) %>% 
+  filter(Parameter == "p")
+
+prex <- pva_smry %>% 
+  filter(Parameter == "Pr_ext") %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x * 100, digits = 2))) %>% 
+  split(.$Scenario)
+
+pK <- pva_smry %>% 
+  filter(Parameter == "Pr_K") %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x * 100, digits = 2))) %>% 
+  split(.$Scenario)
+
+when_ext <- map(prex, \(x) x$Year[which(x$mean > 0)])
+
+prqex <- pva_smry %>% 
+  filter(Parameter == "Pr_qext") %>% 
+  mutate(across(where(is.numeric), \(x) pretty_signif(x * 100, digits = 2))) %>% 
+  split(.$Scenario)
+
+when_qext <- map(prqex, \(x) x$Year[which(x$mean > 0)])
+
+ela_sen <- pva_smry %>% 
+  select(Term, mean, sd, `5%`, `95%`) %>% 
+  filter(str_detect(Term, "(ela)|(sen)")) %>% 
+  mutate(quantity = if_else(str_detect(Term, "ela"), "Elasticity", "Sensitivity"),
+         Term = factor(case_match(Term, c("sen_phij","ela_phij") ~ 2,c("sen_phia","ela_phia") ~ 1,
+                                  c("sen_fer","ela_fer") ~ 3,c("sen_omega","ela_omega") ~ 5,
+                                  c("sen_alpha","ela_alpha") ~ 4),
+                       levels = c(5:1), labels = c(
+                         "Age at last\nbreeding","Age at first\nbreeding",
+                         "Fertility","Juvenile\nsurvival","Adult\nsurvival")))
+
+thm_obj <- theme(
+  legend.text = element_text(size = 13),
+  legend.key = element_rect(colour = "transparent",fill = "transparent"),
+  legend.title = element_text(size = 11.5),
+  panel.spacing = unit(5, "mm"),
+  axis.line = element_line(colour = "black"),
+  axis.text = element_text(size = 13),
+  axis.title = element_text(size = 14),
+  strip.background = element_blank(),
+  strip.text = element_text(size = 12),
+  panel.background = element_blank(),
+  panel.grid = element_blank())
+
+```
+
+```{r cors}
+
+cors <- pva_chains %>% 
+  map(as.matrix) %>% 
+  reduce(rbind) %>%
+  .[,which(str_detect(colnames(.), c("(phi_a\\[)|(phi_j\\[)|(om\\[)|(f\\[)|(annual_growth_rate\\[1,)")))] %>% 
+  as_tibble() %>% 
+  select(-matches("(2[0-9])|(3[0-9])")) %>% 
+  (\(x) {
+    nms <- paste0("y",seq(1,19))
+    map(set_names(paste0("[", seq(1,19),"]"), nms), .f = 
+          \(xx) {
+            v <- x %>% 
+              rename_with(\(z) str_remove(z, "1, ")) %>% 
+              select(contains(xx))
+            nms <- names(v)
+            c <- ncol(v)
+            map(set_names(2:c, nms[-1]), \(cc) {
+              cor(v[,1], v[,cc])
+            })
+          }
+    )
+  }
+  )
+
+as <- list_flatten(cors) %>% 
+  .[str_detect(names(.), "phi_a")] %>% 
+  tibble(param = names(.), cor = .) %>% 
+  mutate(cor = unlist(cor),
+         pg0 = cor > 0)
+
+js <- list_flatten(cors) %>% 
+  .[str_detect(names(.), "phi_j")] %>% 
+  tibble(param = names(.), cor = .) %>% 
+  mutate(cor = unlist(cor),
+         pg0 = cor > 0)
+
+om <- list_flatten(cors) %>% 
+  .[str_detect(names(.), "om")] %>% 
+  tibble(param = names(.), cor = .) %>% 
+  mutate(cor = unlist(cor),
+         pg0 = cor > 0)
+
+fs <- list_flatten(cors) %>% 
+  .[str_detect(names(.), "f")] %>% 
+  tibble(param = names(.), cor = .) %>% 
+  mutate(cor = unlist(cor),
+         pg0 = cor > 0)
+
+```
+
+\linenumbers
+\doublespacing
+
+# ABSTRACT{-}
+The Southern Mountain population of the Western yellow-breasted chat (*Icteria virens auricollis*) was designated as endangered in Canada following extensive destruction of riparian breeding habitat and a resultant small population size.
+Habitat restoration efforts began in 2001 and population monitoring efforts were undertaken to identify threats to the persistence of the species.
+In concurrence with habitat restoration, low breeding female abundance and high rates of brood parasitism were identified as potential threats to the long-term viability of the Southern Mountain chat in the south Okanagan Valley in Canada.
+We conducted a population viability analysis and quantified extinction and quasi-extinction probabilities (i.e., the probability that the population will fall below 20 breeding pairs), as well as probabilities that the  population would reach the estimated carrying capacity of our study region under a series of management scenarios.
+Specifically, we tested changing rates of brood parasitism and of direct annual losses to the breeding population, as might be caused by grazing livestock, urban development, or further agricultural expansion.
+Experimentally manipulated parasitism rates did not increase risk of extinction or quasi-extinction although brood parasitism significantly reduced fertility rates among individual nests.
+Asymptotic population growth rates were approximately three times more sensitive to changes in adult survival rates than fertility rates.
+Asymptotic population growth rates were approximately twice as sensitive to changes in adult survival than juvenile survival rates.
+For instance, annual losses of 20% of the breeding population resulted in a `r max(prqex$"5"$mean)`% chance of quasi-extinction after 20 years.
+Future monitoring and management efforts are more effectively allocated by promoting adult survival through conservation of  habitat and reducing direct anthropogenic threats to adult birds.
+
+## Keywords:{-}
+*Bayesian population viability analysis*, *brood parasitism*, *brown-headed cowbird*, *endangered species*, *immigration*, *integrated population model*
+
+# INTRODUCTION
+As wildlife populations continue to decline globally [@Newbold2015;@Johnson2017;@Williams2020] and conservation outcomes fall short of goals [@Defries2017], conservationists increasingly must allocate limited resources to achieve objectives most effectively.
+To this end, practitioners quantify ecological and anthropogenic pressures on stochastic demographic rates [@Melbourne2008;@Mills2013] and project effects at the population level to determine what factors are limiting populations and allocate resources accordingly.
+Disentangling demographic mechanisms of population dynamics from the pressures that drive these processes is necessary to identify 1) the limiting stage of the life-cycle, and 2) the extent to which conservation interventions may influence population growth rates [@Milligan2018;@Saunders2018].
+
+Projecting growth rates in population viability analyses require that data are obtained for multiple demographic rates concurrently.
+However, data on movement (i.e. immigration) in highly mobile taxa are difficult to obtain yet may exert a strong influence over population dynamics at the local scale through a density-dependent buffering of abundance [@Bowler2005;@Berec2007;@Schaub2013;@Wilson2017;@Millon2019].
+Advances in ecological modelling have made it possible through integrated analyses of complementary datasets to quantify processes such as immigration [@Abadi2010], yielding more robust demographic projections [@Heard2013;@Green2015;@Saunders2018;@Hooker2020;@Penman2022].
+Ultimately, this framework grants conservationists insight into how ecological and anthropogenic pressures drive population growth through the affected demographic rates [@Pease1995].
+
+Over the previous century, channelization of rivers, agricultural expansion, and urban expansion led to the extensive destruction of riparian habitat in Western Canada's Okanagan Valley [@Lea2008].
+For bird species that use riparian ecosystems of the south Okanagan Valley, including the Southern Mountain population of the Western yellow-breasted chat (*Icteria virens auricollis*; Southern Mountain chat), this represented an estimated 63% to 92% loss of breeding habitat [@EnvironmentCanada2016].
+Surveys of the small remnant population indicated that fewer than 20 breeding pairs remained in the south Okanagan Valley in 2000 [@EnvironmentCanada2016].
+The Southern Mountain chat was subsequently listed as federally endangered in Canada under the Species at Risk Act (SARA) [@EnvironmentCanada2016].
+
+In 2001, efforts were initiated to exclude grazing livestock from key riparian areas to restore breeding habitat for Southern Mountain chats [@Forrester2017].
+Several concurrent monitoring efforts were undertaken to quantify demographic rates of the Southern Mountain chat population, including territory surveys [@Forrester2020], mark-detection monitoring [@McKibbin2012], and nest surveys [@McKibbin2010].
+These efforts were designed to monitor changes in abundance and identify major threats to the viability of the Southern Mountain chat population.
+Postulated threats included low female abundance and brood parasitism by the brown-headed cowbird (*Molothrus ater*) [@McKibbin2010;@EnvironmentCanada2016;@Forrester2020;@Forrester2023].
+
+Although several studies have estimated individual demographic rates from these data [@McKibbin2008;@McKibbin2010;@McKibbin2012a;@Huang2017;@Forrester2020;@Mancuso2022a], population analyses were limited with little or no mechanism for uncertainty propagation and thus systematically underestimated demographic and environmental stochasticity [@Schaub2007;@Schaub2021].
+Additionally, such analyses are not able to assess the relative influence of ecological pressures like brood parasitism or perturbations to specific demographic rates at the population-level [@Melbourne2008;@Chaudhary2019;@Lacy2019].
+As a result, this creates uncertainty regarding decisions for conservation action for this population.
+
+Therefore, we developed and implemented an integrated Bayesian population viability analysis [@Saunders2018] and projected the population viability of the Southern Mountain chat while considering effects of brood parasitism and density-dependence at the population-level through their effects on fertility and immigration rates.
+The aims of this study were threefold.
+Firstly, we quantified demographic rates of juvenile and adult survival, fertility, and immigration of the Southern Mountain chat in a fully stochastic model to accommodate population projections 20 years into the future.
+Next, in our projection simulations, we experimentally manipulated ecological and anthropogenic pressures to determine the extent to which various management practices influence the viability of this population.
+Finally, we conducted a sensitivity analysis of the population growth rate to individual demographic rates to determine the limiting stage of the life-cycle and inform on how to most effectively allocate limited resources in future conservation efforts directed at small populations experiencing similar threats.
+
+
+# METHODS
+
+## Study population
+The Southern Mountain chat (*Icteria virens auricollis*) commonly nests in dense riparian thickets such as wild rose (*Rosa* spp.) in our study region [@McKibbin2010].
+Chats are typically secretive and elusive throughout most of their life-cycle, with the exception of the breeding season when adult males are more easily observed during their breeding displays and vocalizations from prominent song perches.
+Females begin reproduction in the year after hatching [@Thompson1973] and we assumed the same mean annual fertility rate until death.
+Breeding adult females are more rarely observed or detected from their vocalizations which are mostly indistinguishable from similar call vocalizations made by males.
+Though chats are known to engage in mate-guarding [@Mays2004] and were originally thought to be socially monogamous, this population often breeds in colonies and as such, extra-pair paternity (i.e., polyandry, polygamy, and conspecific brood parasitism) is common [@Mino2011].
+However, during the study period, repeated presence of an adult male displaying territorial behaviour within a discrete habitat area or ‘territory’, with or without the confirmed presence of a breeding adult female or nest, was assumed to be indicative of the presence of a single breeding pair.
+Thus, surveys of territories are expected to be generally indicative of minimum total abundance of breeding pairs.
+
+The Southern Mountain chat is distributed among three discontinuous habitat patches in southern British Columbia; however, logistical considerations constrained monitoring efforts to the south Okanagan Valley, a region comprising approximately 371 hectares of critical riparian habitat for the Southern Mountain chat population [@EnvironmentCanada2016].
+Territory sizes of chats range from 0.37 ha in our study region [@McKibbin2010] to 1.24 ha in Indiana, USA [@Thompson1973], and assuming 371 ha of critical suitable habitat [@EnvironmentCanada2016], this corresponds to a carrying capacity ranging between 300 to 1000 breeding pairs.
+
+
+## Data sources
+### Population counts
+Territory surveys, in which breeding males were counted as a proxy measure for the number of breeding pairs, adhered to methods described by McKibbin and Bishop [@McKibbin2010;@McKibbin2012a].
+Sites containing potentially suitable breeding territories were identified according to vegetation composition [@McKibbin2010] and these sites were visited every three to four days between mid-May and late July annually between `r start_yr` and `r end_yr` (excluding 2011) to determine the presence of singing males.
+The observer waited for 10 minutes at each territory and if no individual was detected, the observer used playback of a singing male chat for 30 seconds, followed by a 2-minute silence, during which the observer monitored for a reaction.
+If no individuals were detected, the recording was replayed once again followed by 2-minute silence before the observer moved 50 m to the next suitable area.
+A minimum of 20 minutes was spent in each potential breeding territory.
+
+### Mark-detection
+To quantify apparent survival rates, `r caps[[1]][["n"]]` nestlings from `r ybch_con[["n.nests"]]` nests were banded at an age of 5-7 days between `r start_yr` and `r end_yr` following procedures described by McKibbin and Bishop [@McKibbin2008].
+Individuals were marked with colour bands and aluminum Canadian Wildlife Service bands and were passively or actively detected during surveys or during mist-netting operations [@Morgan2007;@McKibbin2008;@McKibbin2012].
+Thus, rates of juvenile survival correspond to the rate of survival from banding-date in year $t$ to $t+1$, while apparent annual adult survival was estimated from years $t+1$ onward.
+We assess apparent survival rates for adults from individuals banded as nestlings to mitigate bias associated with transient individuals in estimates of apparent annual survival.
+
+### Fertility and parasitism rates
+When an individual was detected during surveys, nest monitoring was conducted to ascertain mean annual fertility rates (henceforth fertility rate; the mean number of live female fledglings per nest, assuming a sex ratio of 1:1).
+Between `r start_yr` and `r end_yr` (excluding 2011), we monitored a median of 20 (range of 3 to 59) nests annually for mean annual fertility rate estimation according to procedures described by @Morgan2007.
+We monitored nests with mirror-poles or by direct observation every 3 days during the nesting cycle to ascertain clutch size, hatch date, occurrence of cowbird parasitism, number of fledglings, and presumed fledge date.
+
+## Population projections
+We assessed population viability under 5 projection scenarios wherein 1) no management action was taken and demographic rates were projected according to their historical 20-year mean; 2) brood parasitism increased by 20%; 3) brood parasitism decreased by 20%; 4) habitat loss or degradation (such as the re-introduction of livestock grazing or urban/agricultural development and associated anthropogenic pressures [@Calvert2013]) resulted in a 10% annual loss of the resident breeding population; or 5) habitat loss or degradation resulted in a 20% annual loss of the resident breeding population.
+Scenarios 4 and 5 therefore are intended to simulate the pressures that led to the observed population decline in the previous century.
+
+Brood parasitism was projected at the mean annual rate for scenarios 4 and 5.
+We then assessed population viability according to three criteria.
+First, we quantified the probability that the number of breeding pairs would fall below a quasi-extinction threshold of 20 breeding pairs by `r end_yr+20` under each scenario; second, we quantified the probability that the population would become locally extinct, i.e., that the number of breeding pairs would reach 0 by `r end_yr+20` under each scenario.
+Lastly, we quantified probabilities that the population would reach carrying capacity (based on an estimate of 1000 breeding pairs) under each scenario.
+
+
+## Statistical methods
+To estimate demographic rates in our study-population of chats, we implemented an integrated population model comprising three sub-models including 1) a zero-inflated Poisson fertility model, 2) a CJS model of annual apparent survival of juvenile and adult chats [@Cormack1964;@Schwarz2001], and 3) an overdispersed Poisson territory survey model.
+Estimation of the joint likelihood of integrated population models assumes independence of data sets contributing information; however, simulation experiments suggest that demographic estimates are robust to violations of this assumption [@Fitsum2010].
+Independence of datasets in this population is not feasible given the small initial population size.
+We implemented our integrated Bayesian population viability model using the Nimble compiler [@DeValpine2017] via version 1.3.0 of the Nimble package [@DeValpine2022] in `r R.version$version.string` [@RCoreTeam2018].
+
+We implemented a female-only model, thus demographic rates and all abundance estimates reflect estimates of the number of breeding pairs.
+Our model was fully time-dependent in demographic rates of fertility, juvenile and adult survival, and immigration according to normally distributed random year-effects.
+In our survey model, we estimated total abundance of breeding pairs in year $t$ ($N_{tot_t}$) according to a Poisson model of annual counts and a normally distributed error term to allow for imperfect detection in our survey count model:
+\begin{align*}
+  count_t \sim&~Poisson(N_{tot_t} + \epsilon_{N_t})\\
+\end{align*}
+
+We implemented a multinomial likelihood formulation of the release-detection array to estimate latent parameters of apparent juvenile survival and adult survival from mark-detection data.
+We estimated apparent survival because we do not distinguish emigration from mortality.
+Survival rates were fully time-dependent according to a mean survival rate with normally distributed random year-effects to account for environmental stochasticity.
+Annual detection probabilities in the CJS model were also estimated with normally distributed random year-effects to account for variable detection effort and effects of different surveyors on detection probabilities.
+Mist netting operations were suspended from 2011 through 2014 and so we included a nuisance parameter to adjust detection probabilities for incidental detection during this time.
+
+Next, we implemented a fertility model where the number of fledglings from nest $j$ ($J_j$) was modelled as a zero-inflated Poisson ($zip$) process of the expected number of fledglings ($\bar{f}_j$), given that the nest did not fail (i.e., no chicks fledged) with probability $\theta$:
+\begin{align*}
+  J_j \sim&~zip(\bar{f}_j,~\theta)\\
+  log(\bar{f}_j) =&~int_f + \beta_{par} \times par_j + \epsilon_{f_t}\\
+  \theta \sim&~uniform(0,~1)
+\end{align*}
+where $\beta_{par}$ is the effect of cowbird parasitism on the expected fertility rate of chats, $par_j$ is an indicator variable of parasitism, and $\epsilon_{f}$ is a term for environmental stochasticity.
+The rate parameter of the zero-inflated Poisson accurately reflects the expected annual fertility of breeding chats in our study area because in cases of total nest failure, chats were most often observed to begin a second nesting attempt.
+
+The rate of parasitism in the population in year $t$ ($\pi_t$) was estimated as an intercept term ($int_{\pi}$) and a random year-effect estimated from a normal distribution with a mean of 0 ($\epsilon_{\pi_t}$).
+\begin{align*}
+   logit(\pi_t) =&~int_{\pi} + \epsilon_{\pi_t}\\
+   par_j \sim&~bernoulli(\pi_t)
+\end{align*}
+Thus, the mean fertility rate in year $t$ ($f_t$) given a parasitism rate, $\pi_t$, was computed for population projections as:
+\begin{align*}
+    log(f_t) =&~int_f + \beta_{par} \times \pi_t + \epsilon_{f_t}
+\end{align*}
+
+Next, we derived a latent parameter representing the abundance of immigrant breeding pairs in the pre-breeding survey at time $t$ ($N_{i_t}$) as a Poisson process with environmental stochasticity.
+\begin{align*}
+    N_{i_t} \sim&~poisson(\omega_t) \\ 
+    log(\omega_t) =&~\bar{\omega} + \beta_{density} \times ((log(N_{tot[t]}) - 5.21)/4.52) + \epsilon_{\omega_t}
+\end{align*}
+with mean immigration rate over the study period ($\bar{\omega}$), the effect of density-dependence in immigration ($\beta_{density}$) given log-scale total abundance in year *t* (centered and scaled to the 20-year study period), and the annual stochastic error on the mean immigration rate, $\epsilon_{\omega_t}$.
+
+We used informative gamma priors to estimate dispersion parameters accounting for stochastic error in demographic rates ($rate$), while we used uninformative priors to estimate dispersion parameters describing detection processes and parasitism rates ($detect$):
+\begin{align*}
+    \sigma_{rate} \sim&~gamma(16,40)\\
+    \epsilon_{rate_t} \sim&~\mathcal{N}(0, \sigma_{rate})\\
+    \sigma_{detect} \sim&~uniform(0,~5)\\
+    \epsilon_{detect_t} \sim&~\mathcal{N}(0, \sigma_{detect})
+\end{align*}
+With demographic parameters in year $t$ for adult apparent survival ($\phi_{A_t}$), juvenile apparent survival ($\phi_{J_t}$), mean annual fertility rate per breeding pair ($f_t$), and the derived quantity for the abundance of immigrants, we then evaluated total abundance in the pre-breeding census ($N_{tot_t}$) in a fully-stochastic population model [@Schaub2021] as follows:
+\begin{align*}
+    N_{tot_t} =&~N_{J_t} + N_{A_t} + N_{i_t}\\
+    N_{J_{t+1}} \sim&~poisson(\phi_{J_t} \times f_t \times N_{tot_t})\\
+    N_{A_{t+1}} \sim&~binomial(\phi_{A_t},~N_{tot_t})
+\end{align*}
+Where $N_{J}$, $N_{A}$ and $N_{i}$ are evaluated for occasions after the first survey year and were initialized in the first year of surveys using priors for the stage-specific abundances.
+The annual rate of change in the population was calculated as $\frac{N_{tot_{t+1}}}{N_{tot_t}}$.
+The asymptotic population growth rate over the period spanning territory surveys was calculated as $(\frac{N_{tot_{20}}}{N_{tot_1}})^{1/19}$.
+This configuration allowed us to test population projection scenarios by manipulating rates of parasitism and effects of proportional losses to the breeding population (expressed as fractional changes to rates of survival or reproduction) on population viability.
+
+Finally, our data did not did not support the implementation of fully uncorrelated process variance in our model, i.e., estimating process variance for all demographic parameters from a multivariate normal distribution [@Link2005;@Schaub2013], therefore we applied methods developed for matrix population models to quantify the relative contributions of demographic rates to population growth rates [@Stahl2006;@Oli2001;@Stott2016a].
+We input population vital rates of mean adult survival, mean juvenile survival, mean fertility, and the asymptotic population growth rate from our IPM into equations to calculate the implicit derivatives of the female-only matrix population model [@Oli2001].
+Structural population parameters including age at first and last breeding ($\alpha$ and $\tau$ respectively) were not estimated but rather were derived from prior species knowledge.
+The longevity of chats in the wild may be 11 years or more [@BirdBandingLaboratory2019]; therefore, we assumed a maximum breeding age of $\tau=11$.
+The implicit derivatives of the matrix models with respect to each demographic process are interpreted as the sensitivity of asymptotic population growth to the given time-invariant demographic process [@Oli2001].
+The relative contribution of changes to each demographic rate on population change, elasticity, was then calculated from standard formulae [@Oli2001].
+
+Model coefficients were evaluated to be statistically significant when 90% Bayesian credible intervals (CIs) did not overlap 0 on the logarithmic scale.
+Convergence was assessed when all monitored model parameters were evaluated to have $\hat{R} < 1.05$ with 4 MCMC chains.
+Convergence was achieved after 1,500,000 iterations, including 500,000 burn-in iterations, at a thinning rate of 100.
+
+# RESULTS
+
+## Population viability projections
+
+Under scenarios 1, 2, and 3, the population was projected to be as high as 1000 breeding pairs (the estimated regional carrying capacity), while under scenario 4, the population size was projected to be relatively stable between `r min(N$N_tot$"4"$mean[21:40])` and `r max(N$N_tot$"4"$mean[21:40])` pairs.
+Under scenario 5, fewer than 50 breeding pairs remained in the region by 2041 (Fig. 1).
+
+Scenario 5, wherein habitat loss or degradation resulted in a 20% annual loss of the resident breeding population, showed the highest chance of quasi-extinction at `r max(prqex$"5"$mean)`% and a `r max(prex$"5"$mean)`% chance of population extinction, i.e., the abundance of breeding pairs reached 0 after 20 years.
+The next-highest chance of quasi-extinction occurred under scenario 4, where by `r prex$"4"$Year[which.max(prex$"4"$mean)]`, we estimated a `r max(prqex$"4"$mean)`% chance of quasi-extinction and a `r max(prex$"4"$mean)`% chance of population extinction after 20 years.
+
+Under scenarios 2 and 3, which correspond to a 20% increase and 20% decrease respectively in annual rates of brood parasitism, probabilities of quasi-extinction and extinction were below `r max(c(prqex$"2"$mean, prqex$"3"$mean))`% and `r max(c(prex$"2"$mean, prex$"3"$mean))`% respectively.
+The chances of quasi-extinction and extinction under these scenarios did not differ from projections of quasi-extinction (`r max(prqex$"1"$mean)`%) and extinction (`r max(prex$"1"$mean)`%) under scenario 1, wherein no change to demographic rates occurred.
+
+Probabilities of reaching the estimated carrying capacity of 1000 breeding pairs by `r end_yr+20` were `r pK$"1"$mean[20]`% in scenario 1, `r pK$"2"$mean[20]`% in scenario 2, and `r pK$"3"$mean[20]`% in scenario 3.
+This occurred with a probability above 50% soonest under scenario 3.
+The population reaches carrying capacity with probability of 50% in `r pK$"1"$Year[min(which(as.numeric(pK$"1"$mean) > 50))]` under scenario 1, `r pK$"2"$Year[min(which(as.numeric(pK$"2"$mean) > 50))]` under scenario 2, and `r pK$"3"$Year[min(which(as.numeric(pK$"3"$mean) > 50))]` under scenario 3.
+
+
+```{r fig1, fig.cap="Abundance of breeding pairs of Southern Mountain chat (\\textit{Icteria virens auricollis}) in the south Okanagan Valley of Canada between 2002 and 2021, and projected abundance under 5 scenarios to 2041. Under scenario 1, demographic rates of fertility, adult survival, and juvenile survival were projected according to their 2002-2021 means. In scenarios 2 and 3, rates of parasitism by the brown-headed cowbird (\\textit{Molothrus ater}) increased and decreased by 20% respectively. Under scenarios 4 and 5, we simulated a habitat degradation event that suppressed the breeding population by 10% and 20% annually, respectively. Solid lines and shaded ribbons indicate posterior means and 90% credible intervals of population estimates. Black horizontal dashed line at \\textit{y=1000} indicates the approximate carrying capacity of our study region.", include = T, fig.dim=c(7.5,6), fig.dpi=240, cache=FALSE, warning=FALSE}
+
+N$N_tot %>% 
+  list_rbind() %>% 
+  mutate(Year = as.numeric(Year)) %>% 
+  filter(!(Scenario > 1 & Year < 2022)) %>%
+  ggplot(aes(x = Year, y = as.numeric(mean), colour = Scenario, fill = Scenario, group = Scenario))+
+  geom_line(lwd = 0.8)+
+  geom_ribbon(aes(x=Year, ymax=as.numeric(`95%`), ymin=as.numeric(`5%`),fill=Scenario),colour=NA, alpha=0.1)+
+  scale_fill_colorblind()+
+  scale_colour_colorblind()+
+  geom_hline(yintercept = 1000, linetype = 2, linewidth = 0.75, colour = "black")+
+  geom_vline(xintercept = 2022, linetype = 2, linewidth = 0.75, colour = "firebrick2")+
+  scale_x_continuous(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0), breaks = seq(0,1000,150), limits = c(0,1050))+
+  labs(y = "Breeding pair abundance")+
+  thm_obj+
+  theme(legend.position = "inside",
+        legend.position.inside = c(0.1,0.8),
+        axis.title.y = element_text(vjust = 2.5))
+
+```
+
+## Population growth rates
+
+The study population realized an asymptotic growth rate of `r gr$realized_gr$mean` `r paste0( "(",gr$realized_gr$"5%"," : ", gr$realized_gr$"95%",")")` between `r start_yr` and `r end_yr`.
+Under scenario 1, wherein no action or change affected demographic rates between `r start_yr` and `r end_yr+20`, chats are estimated to experience an asymptotic growth rate of `r gr$"proj_gr[1]"$mean` `r paste0( "(",gr$"proj_gr[1]"$"5%"," : ", gr$"proj_gr[1]"$"95%",")")`.
+Scenario 3, wherein parasitism decreased by 20%, yielded the highest growth rate at `r gr$"proj_gr[3]"$mean` `r paste0( "(",gr$"proj_gr[3]"$"5%"," : ", gr$"proj_gr[3]"$"95%",")")`, whereas scenario 5, wherein habitat loss resulted in a 20% annual loss of the breeding population, experienced a growth rate of `r gr$"proj_gr[5]"$mean` `r paste0( "(",gr$"proj_gr[5]"$"5%"," : ", gr$"proj_gr[5]"$"95%",")")` (Fig. 1).
+
+## Demographic rates
+
+### Survival
+Adult Southern Mountain chats had mean annual apparent survival rates of `r betas$phia.int$mean` `r paste0( "(",betas$phia.int$"5%"," : ", betas$phia.int$"95%",")")` on the logit scale with normally distributed annual variation according to a standard deviation of `r dispersion$sigma_ta$mean` (CI = `r paste0(dispersion$sigma_ta$"5%"," : ", dispersion$sigma_ta$"95%")`).
+The mean back-transformed rate of adult annual apparent survival was `r bar$phia_bar$mean` (CI = `r paste0(bar$phia_bar$"5%"," : ", bar$phia_bar$"95%")`), with annual rates of survival ranging from `r min(phi_a$hist$mean)` to `r max(phi_a$hist$mean)`.
+Juveniles had mean annual apparent survival rates of `r betas$phij.int$mean` `r paste0( "(",betas$phij.int$"5%"," : ", betas$phij.int$"95%",")")` on the logit scale with normally distributed annual variation according to a standard deviation of `r dispersion$sigma_tj$mean` (CI = `r paste0(dispersion$sigma_tj$"5%"," : ", dispersion$sigma_tj$"95%")`).
+The mean back-transformed rate of annual apparent survival for juveniles was `r bar$phij_bar$mean` (CI = `r paste0(bar$phij_bar$"5%"," : ", bar$phij_bar$"95%")`), with annual rates of survival ranging from `r min(phi_j$hist$mean)` to `r max(phi_j$hist$mean)`.
+
+### Fertility and parasitism
+
+Brood parasitism by brown-headed cowbirds significantly negatively influenced log-scale fertility rates ($\beta_{par}$ = `r betas$f.par$mean`; CI = `r paste0(betas$f.par$"5%"," : ", betas$f.par$"95%")`).
+A mean of `r betas$pi.int$mean` `r paste0( "(",betas$pi.int$"5%"," : ", betas$pi.int$"95%",")")` nests were parasitized annually on the logit scale with normally distributed annual variation according to a standard deviation of `r dispersion$sigma_pi$mean` (CI = `r paste0(dispersion$sigma_pi$"5%"," : ", dispersion$sigma_pi$"95%")`).
+Back-transformed to the probability scale, this yielded in a proportion of `r pi$proj$mean[1]` nests parasitized annually, with annual estimates ranging from `r min(pi$hist$mean)` in `r pi$hist$Year[which.min(pi$hist$mean)]` to `r max(pi$hist$mean)` in `r pi$hist$Year[which.max(pi$hist$mean)]`.
+
+
+### Immigration and density-dependence
+
+The log-scale average annual number of immigrants was `r betas$om.int$mean` (CI = `r paste0(betas$om.int$"5%"," : ", betas$om.int$"95%")`).
+The number of immigrants in this population fluctuated according to normally distributed annual variation with a standard deviation of `r dispersion$sigma_ti$mean` (CI = `r paste0(dispersion$sigma_ti$"5%"," : ", dispersion$sigma_ti$"95%")`).
+This equated to an annual rate of immigration into the breeding population ranging from `r min(irate$hist$mean)` to `r max(irate$hist$mean)`.
+We did not detect a significant effect of density-dependence in the annual number of immigrants ($\beta_{density}$ = `r betas$om.ddi$mean`; CI = `r paste0(betas$om.ddi$"5%"," : ", betas$om.ddi$"95%")`).
+
+
+## Sensitivity and elasticity
+
+<!-- table! -->
+In our sensitivity analysis, we found that adult survival had the strongest relative influence over (i.e. was most elastic to) population growth of the three measured vital rates captured in the matrix model formulation (Fig. 2).
+Elasticity of asymptotic population growth to adult survival was `r ela$ela_phia$mean` (CI = `r paste0(ela$ela_phia$"5%"," : ", ela$ela_phia$"95%")`), while elasticity to juvenile survival and fertility rates were `r ela$ela_phij$mean` (CI = `r paste0(ela$ela_phij$"5%"," : ", ela$ela_phij$"95%")`) and `r ela$ela_fer$mean` (CI = `r paste0(ela$ela_fer$"5%"," : ", ela$ela_fer$"95%")`).
+These relative measures of contributions to population growth correspond to absolute sensitivities of `r sen$sen_phia$mean` (CI = `r paste0(sen$sen_phia$"5%"," : ", sen$sen_phia$"95%")`) for adult survival, `r sen$sen_phij$mean` (CI = `r paste0(sen$sen_phij$"5%"," : ", sen$sen_phij$"95%")`) for juvenile survival, `r sen$sen_fer$mean` (CI = `r paste0(sen$sen_fer$"5%"," : ", sen$sen_fer$"95%")`) for fertility.
+We additionally computed elasticity and sensitivity for the structural components of age at first breeding (elasticity = `r paste0(ela$ela_alpha$mean, "; ", ela$ela_alpha$"5%"," : ", ela$ela_alpha$"95%")`; sensitivity = `r paste0(sen$sen_alpha$mean, "; ", sen$sen_alpha$"5%"," : ", sen$sen_alpha$"95%")`) and maximum breeding age (elasticity = `r paste0(ela$ela_omega$mean, "; ", ela$ela_omega$"5%"," : ", ela$ela_omega$"95%")`; sensitivity = `r paste0(sen$sen_omega$mean, "; ", sen$sen_omega$"5%"," : ", sen$sen_omega$"95%")`).
+
+```{r fig3, fig.cap="The adult survival rate of the Southern Mountain chat (\\textit{Icteria virens auricollis}) has the largest proportional effect (elasticity) on the population asymptotic growth rates, followed by juvenile survival, and fertility. Asymptotic growth rate is least sensitive to structural population parameters of age at first and last breeding. Elasticity is computed as sensitivity rescaled to account for the magnitude of both the population growth rate and each respective matrix model element. Point estimates and line ranges are posterior means and 90% Bayesian credible intervals.", include = T, fig.dim=c(6.5,5), fig.dpi=240, cache=FALSE}
+
+ggplot(ela_sen, aes(x = mean, y = Term))+
+  facet_wrap(~quantity, scales = "free_x")+
+  geom_point()+
+  geom_linerange(aes(x = mean, xmax = `95%`, xmin = `5%`, y = Term))+
+  geom_vline(xintercept = 0, linetype = 2, linewidth = 0.5, colour = "darkgrey")+
+  labs(y = NULL, x = "Quantity estimate (dimensionless)")+
+  theme(panel.spacing.x = unit(25, "pt"))+
+  thm_obj
+
+```
+
+## Model fit and detection probability
+
+Bayesian P-values derived from Freeman-Tukey residuals indicated that the zero-inflated Poisson fertility model (`r bayes$Bp_fledge$mean`), the CJS survival model (`r bayes$Bp_CJS$mean`), and the Poisson survey model (`r bayes$Bp_survey$mean`) each fitted our data well.
+The overdispersion parameter to account for survey error in population counts was estimated at `r dispersion$sigma_ds$mean` (CI = `r paste0(dispersion$sigma_ds$"5%"," : ", dispersion$sigma_ds$"95%")`).
+Annual detection probabilities during mark-detection ranged from `r min(det$mean)` to `r max(det$mean)`.
+Mean detection probability on the log scale was `r betas$p.int$mean` (CI = `r paste0(betas$p.int$"5%"," : ", betas$p.int$"95%")`) with normally distributed annual variation according to a standard deviation of `r dispersion$sigma_p$mean` (CI = `r paste0(dispersion$sigma_p$"5%"," : ", dispersion$sigma_p$"95%")`).
+Detection probabilities were lower between `r 2001+min(which(ybch_con$passive > 0))` and `r 2001+max(which(ybch_con$passive > 0))` when only passive detection occurred `r betas$p.pas$mean` (CI = `r paste0(betas$p.pas$"5%"," : ", betas$p.pas$"95%")`).
+
+
+# DISCUSSION
+
+We quantified annual demographic rates of apparent adult survival, juvenile survival, mean fertility, and immigration for the endangered Southern Mountain chat population of Western Canada.
+We projected population size 20 years into the future, given demographic and environmental stochasticity typical of this population under 5 projection scenarios and quantified density-dependent regulation of immigration as well as effects of parasitism on fertility rates.
+We calculated the sensitivity and elasticity of asymptotic population growth to each demographic rate to characterize where future monitoring and conservation resources could most practically be allocated.
+The Southern Mountain chat population reached the quasi-extinction threshold within a short enough time frame to qualify for IUCN endangered status in only one scenario, wherein 20% of the breeding population was lost annually due to habitat loss or degradation wherein adult bird mortality was high.
+No other projection yielded sufficiently high probabilities of reaching the quasi-extinction threshold to qualify this population for the current designations of endangered or threatened.
+Conversely, with no intervention and no changes to current circumstances for the chats, we projected that the population would reach the estimated regional carrying capacity of 1,000 breeding pairs with a probability of 50% in `r pK$"1"$Year[min(which(as.numeric(pK$"1"$mean) > 50))]`.
+
+Notwithstanding IUCN designations, the total population currently remains relatively small at `r N[["N_tot"]][["1"]][["mean"]][20]` (CI = `r paste0(N$N_tot$"1"$"5%"[20]," : ", N$N_tot$"1"$"95%"[20])`) breeding pairs, as of our most recent survey in 2021 in the central and south Okanagan Valley.
+We did not detect compensatory negative density-dependence in immigration rates, a process of population dynamics that typically acts as a buffer in dwindling populations [@Wilson2017].
+Nevertheless, negative density-dependence may be a factor in the current growth of our study population [@Hutchings2015], and when the population reaches the carrying capacity of our study region, immigration rates may correlate more strongly with population abundance.
+Little data are currently available on the rate of habitat restoration that determines the carrying capacity of the study region from year to year; therefore, detecting effects of density-dependence in our study population may require additional monitoring.
+
+Density-independent drivers of demographic change may currently contribute more substantially to population dynamics of the Southern Mountain chat.
+As climate change drives warmer and drier breeding seasons [@RDOS2014], the riparian ecosystem of the Okanagan Valley may transform into unsuitable breeding habitat [@Dwire2018], thus limiting available nesting habitat.
+Furthermore, climate on both the breeding [@Chase2005;@Huang2017] and wintering ranges [@Rockwell2017] influence demographic rates of survival and reproduction.
+Also, habitat succession from mid-successional shrubs and young trees that are favourable breeding habitat for chats [@McKibbin2010] may proceed naturally and reduce the currently available habitat in the low altitude Okanagan valley.
+In scenario 4, we assume no natural succession or changes in habitat due to climate change.
+
+Additionally, breeding and non-breeding habitats of the Southern Mountain chat have historically experienced substantial human modification [@Lea2008;@Venter2016;@Williams2020;@Mancuso2022a]; both agricultural expansion and urban development continue to threaten existing riparian habitat.
+As we demonstrate, persistent human modification of breeding habitat may strongly influence the viability of this population.
+Mitigating these threats through further habitat restoration may therefore be necessary to conserve the Southern Mountain chat in the face of climate change.
+Importantly, chats appear to tolerate some fragmentation of their preferred habitat [@Morgan2007;@Mancuso2022a] with little impact to reproductive output [@Forrester2020].
+Therefore, habitat restoration efforts, even in heavily modified environments, may yield positive outcomes for chat populations.
+
+Previous efforts to evaluate threats to the Southern Mountain chat emphasized impacts at the reproductive stage of the life-cycle [@Morgan2007;@Forrester2020;@Forrester2023].
+However, with two decades of demographic data and a Bayesian analysis, we determined that asymptotic population growth is most sensitive to adult survival, followed by juvenile survival, and least sensitive to changes in fertility.
+This is supported by our simulation projections, wherein manipulations to fertility rates (scenarios 2 and 3) did not yield changes to quasi-extinction or extinction probabilities.
+While the reproductive output at the scale of individual nests significantly decreases as a result of parasitism by the brown-headed cowbird [@Forrester2020;@Forrester2023], other factors such as environmental stochasticity are also important determinants of overall population trajectory.
+Therefore, we consider that future conservation resources are most effectively allocated to activities that promote adult and juvenile survival, rather than fertility.
+In highly modified environments with high road densities surrounding riparian habitat, direct adult and juvenile mortality from collisions with vehicles or other human structures may limit population growth, particularly if traffic volumes increase [@Potvin2010].
+Furthermore, urban expansion may support more free ranging pets such as domestic cats (*Felis catus*), that kill adult and juvenile birds [@Blancher2013], and are considered the leading anthropogenic threat to songbird populations after direct habitat loss [@Calvert2013].
+
+Continuing mark-detection data collection will lead to more precise evaluation of annual survival rates, with the potential to include covariates that may impact survival.
+For example, shorebird populations for which data was collected on predator abundance find strong support for predator control as a means of increasing rates of survival, and consequently, increasing the probability of successful management outcomes [@Saunders2018].
+We recommend that depredation and collision events be also monitored in conjunction with future mark-detection efforts to quantify effects in the Southern Mountain chat population.
+Continuing mark-detection may also provide insight into effects of catastrophic climate events on the study population, which would allow for more robust future projections which consider changes in the frequency of severe climate events [@Huang2017;@Crawford2022].
+Given the rarity of long term mark-detection data sets on songbirds in Canada, this may be a unique opportunity to measure impacts of climate change and other stressors on an avian population.
+
+Although Southern Mountain chat abundance was low at the beginning of our study (estimated between `r paste0(N$N_tot$"1"$"5%"[1]," to ", N$N_tot$"1"$"95%"[1])` breeding pairs), our assessment of quasi-extinction thresholds given environmental stochasticity and population growth rate suggest that the present population is neither threatened under the small-population paradigm, nor the declining-population paradigm [@Hutchings2015].
+Indeed, we project that the population will reach the estimated regional carrying capacity of 1,000 breeding pairs in `r pK$"1"$Year[min(which(as.numeric(pK$"1"$mean) > 50))]` with a probability of 50% if no management or further loss in habitat quality or quantity occurs.
+Overall, this indicates that habitat restoration actions were successful for this population.
+Despite naturally occurring rates of brood parasitism, the Southern Mountain chat population in the south Okanagan Valley does not appear to face threat of extinction within the next 20 years, assuming that the breeding population is not persecuted by further persistent habitat loss or reduction in habitat quality.
+But given that the population remains under threat from climate change [@RDOS2014], agricultural expansion, urban development, and even natural succession to unsuitable climax forest conditions, population extinction is possible in the coming decades.
+As such, conservation actions targeted at habitat conservation and protection, as well as promoting adult survival in human modified environments will be the most effective.
+
+\pagebreak
+
+# AUTHOR CONTRIBUTIONS {-}
+
+SGE - Methodology; Formal analysis; Writing - Original Draft; Writing - Review & Editing; Visualization; Conceptualization.
+AK - Data Curation; Writing - Review & Editing.
+AMB - Data collection; Writing - Review & Editing.
+MB - Data collection; Data Curation; Writing - Review & Editing.
+TRF - Data collection; Writing - Review & Editing.
+KM - Data collection; Writing - Review & Editing.
+RM - Data collection.
+TL - Project administration; Writing - Review & Editing.
+CAB - Data collection; Methodology; Writing - Review & Editing; Visualization; Conceptualization.
+
+# ACKNOWLEDGMENTS {-}
+
+We wish to thank the En’owkin Centre, Penticton Indian Band, Osoyoos Indian Band, BC Parks, BC Ministry of Water, Land and Resource Stewardship, Environment and Climate Change Canada’s Canadian Wildlife Service, and the Nature Trust of British Columbia for their contributions to this research, including granting permission to the land for the years in which these data were collected.
+We also wish to thank the additional private landowners who provided access to their properties for species monitoring activities and participated in riparian restoration efforts.
+Additional thanks to the many biologists who braved challenging field conditions to collect demographic chat data over the years.
+Thanks to Vaseux Lake Bird Observatory for colour-banding incidentally captured chats during their fall migration monitoring program and contributing the associated data to this study over many years.
+
+\pagebreak
+\singlespacing
+
+# LITERATURE CITED {-}
