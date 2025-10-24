@@ -64,7 +64,7 @@ library(knitr)
 ```{r load-data}
 ### LOAD DATA ##############################################################################################
 
-load("../Data/Input/ybch_input.rda")
+load("../Data/Input/pva_input.rda")
 
 n.prj <- ybch_con[["n.prj"]]
 n.scn <- ybch_con[["n.scn"]]
