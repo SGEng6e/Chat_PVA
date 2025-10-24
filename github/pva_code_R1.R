@@ -1,53 +1,13 @@
 
 # Viability of an endangered songbird population is most affected by adult survival and not brood parasitism
 # SG English, A Khan, AM Bezener, M Bieber, TR Forrester, T Luszcz, K Mancuso, R McKibbin, CA Bishop
-
 ### LIBRARIES ###############################################################################################
 
 library(nimble)
 
 ### LOAD DATA ###############################################################################################
 
-load("./ybch_con.rda")
-load("./ybch_dat.rda")
-
-# Initial values
-ybch_ini <- list(
-  N_j = matrix(data = rep(2, (ybch_con$n.occ + ybch_con$n.prj)*ybch_con$n.scn),
-               ncol = ybch_con$n.occ + ybch_con$n.prj, nrow = ybch_con$n.scn),
-  N_a = matrix(data = rep(2, (ybch_con$n.occ + ybch_con$n.prj)*ybch_con$n.scn),
-               ncol = ybch_con$n.occ + ybch_con$n.prj, nrow = ybch_con$n.scn),
-  N_i = matrix(data = rep(2, (ybch_con$n.occ + ybch_con$n.prj)*ybch_con$n.scn),
-               ncol = ybch_con$n.occ + ybch_con$n.prj, nrow = ybch_con$n.scn),
-  sigma_ta = runif(1, 2, 5),
-  eps_ta = rnorm(((ybch_con$n.occ + ybch_con$n.prj-1))),
-  sigma_tj = runif(1, 2, 5),
-  eps_tj = rnorm(((ybch_con$n.occ + ybch_con$n.prj-1))),
-  sigma_tf = runif(1, 2, 5),
-  eps_tf = rnorm(((ybch_con$n.occ + ybch_con$n.prj))),
-  sigma_ti = runif(1, 2, 5),
-  eps_ti = rnorm(((ybch_con$n.occ + ybch_con$n.prj))),
-  
-  beta_phij_int = rnorm(1),
-  beta_phia_int = rnorm(1),
-  beta_p_int = rnorm(1),
-  beta_p_pas = rnorm(1),
-  sigma_p = runif(1, 2, 5),
-  eps_p = rnorm(((ybch_con$n.occ-1))),
-  beta_f_int = rnorm(1),
-  beta_f_par = rnorm(1),
-  theta_f = runif(1, 0.2, 0.5),
-  sigma_pi = runif(1, 2, 5),
-  beta_pi_int = rnorm(1),
-  eps_pi = rnorm((ybch_con$n.occ+ybch_con$n.prj)),
-  beta_om_ddi = rnorm(1),
-  beta_om_int = runif(1, 2, 5),
-  sigma_ds = runif(1, 2, 5),
-  eps_ds = rnorm(ybch_con$n.occ),
-  marr.j_sim = ybch_dat$marr.j,
-  count_sim = ybch_dat$count,
-  fled_i_sim = ybch_dat$fled_i
-)
+load("./pva_input.rda")
 
 ### MODEL SETUP #############################################################################################
 
@@ -90,11 +50,11 @@ PVA <- nimbleCode({
     count[t] ~ dpois(survey[t])
     count_sim[t] ~ dpois(survey[t])
     
-    log(survey[t]) <- log(N_tot[1,t] + idx[1,t]) + eps_ds[t]
+    log(survey[t]) <- log(N_tot[1,t] + ext[1,t]) + eps_ds[t]
     eps_ds[t] ~ dnorm(0, sd = sigma_ds)
   }
   
-  sigma_ds ~ dunif(0,5)
+  sigma_ds ~ dgamma(2,4)
   
   # GoF for survey data: Freeman-Tukey test statistics
   ### Freeman–Tukey residuals
@@ -105,21 +65,23 @@ PVA <- nimbleCode({
   
   ##### SURVIVAL MODEL ####################################################################################
   # Priors
-  beta_phia_int ~ dnorm(0, sd = 1)
-  beta_phij_int ~ dnorm(0, sd = 1)
-  beta_p_int ~ dnorm(0, sd = 1)
+  beta_phia_int ~ dnorm(0.5, sd = 0.25) ### source of var
+  beta_phij_int ~ dnorm(-0.5, sd = 0.25) ### source of var
+  beta_p_int ~ dnorm(1, sd = 0.5)
   beta_p_pas ~ dnorm(0, sd = 1)
   
-  sigma_p ~ dunif(0,5)
-  sigma_tj ~ dgamma(16,40)
-  sigma_ta ~ dgamma(16,40)
+  sigma_p ~ dgamma(2,4)
+  
+  sigma_tj ~ dgamma(16,40)       ### source of var
+  sigma_ta ~ dgamma(16,40)       ### source of var
   
   # Linear models
   for (t in 1:(n.occ+n.prj-1)){ # Here we extend the loop to n.prj more years 
-    logit(phi_j[t]) <- beta_phij_int + eps_tj[t]
-    logit(phi_a[t]) <- beta_phia_int + eps_ta[t]
-    eps_tj[t] ~ dnorm(0, sd = sigma_tj)
-    eps_ta[t] ~ dnorm(0, sd = sigma_ta)
+    logit(phi_j[t]) <- beta_phij_int + eps_j[t]
+    logit(phi_a[t]) <- beta_phia_int + eps_a[t]
+    
+    eps_j[t] ~ dnorm(0, sd = sigma_tj)
+    eps_a[t] ~ dnorm(0, sd = sigma_ta)
   }
   
   # CJS model with multinomial likelihood
@@ -130,8 +92,8 @@ PVA <- nimbleCode({
     
     # Define the cell probabilities of the m-arrays
     # Main diagonal
-    logit(p[t]) <- beta_p_int + 
-      beta_p_pas * passive[t] + 
+    logit(p[t]) <- beta_p_int +
+      beta_p_pas * passive[t] +
       eps_p[t]
     q[t] <- 1-p[t]
     pr_j[t,t] <- phi_j[t] * p[t]
@@ -171,31 +133,45 @@ PVA <- nimbleCode({
   
   ##### PRODUCTIVITY MODEL ################################################################################
   # Priors
-  beta_f_int ~ dnorm(0, sd = 0.5)
-  beta_f_par ~ dnorm(0, sd = 0.5)
+  beta_f_int ~ dnorm(0, sd = 1)
+  beta_f_par ~ dnorm(0, sd = 1)
   theta_f ~ dunif(0,1)
   
-  beta_pi_int ~ dnorm(0, sd = 0.5)
-  sigma_pi ~ dunif(0,5)
+  beta_pi_int ~ dnorm(0, sd = 1)
+  beta_nu_int ~ dnorm(0, sd = 1)
+  
+  sigma_pi ~ dgamma(16,40)
+  sigma_nu ~ dgamma(16,40)
   sigma_tf ~ dgamma(16,40)
   
   # fertility parameters
   for (t in 1:(n.occ+n.prj)) {
-    eps_pi[t] ~ dnorm(0, sd = sigma_pi)
-    eps_tf[t] ~ dnorm(0, sd = sigma_tf)
     logit(pi[t]) <- beta_pi_int + eps_pi[t]
+    logit(nu[t]) <- beta_nu_int + eps_nu[t]
+    
+    eps_pi[t] ~ dnorm(0, sd = sigma_pi)
+    eps_nu[t] ~ dnorm(0, sd = sigma_nu)
+    eps_f[t] ~ dnorm(0, sd = sigma_tf)
     
     for (s in 1:n.scn) {
-      # Linear model of immigration rate
-      log(f[s,t]) <- beta_f_int + beta_f_par * (pi[t] * par_mat[s,t]) + eps_tf[t]
+      nu_unbounded[s,t] <- (1 - nu[t] * bfr_mat[s,t])
+      # reproductive success rate is >= 0 == 1 (valid) ; success rate is < 0 == 0 (invalid)
+      nu_zero[s,t] <- step(nu_unbounded[s,t])
+      
+      f[s,t] <- exp(beta_f_int + beta_f_par * (pi[t]*par_mat[s,t])+eps_f[t]) * nu_unbounded[s,t]*nu_zero[s,t]
     }
   }
   # Models
+  for (i in 1:n.rep) {
+    # Probability of reproductive failure
+    rep_fail[i] ~ dbern(nu[rep_yr[i]])
+  }
+  
   for(i in 1:n.nests) {
     # Probability of parasitism
-    parasi_i[i] ~ dbern(pi[yr_n[i]])
+    parasi_i[i] ~ dbern(pi[yr.n[i]])
     # Linear model of reproductive output for nest n (for both sexes)
-    log(lam[i]) <- beta_f_int + beta_f_par * parasi_i[i] + eps_tf[yr_n[i]]
+    log(lam[i]) <- beta_f_int + beta_f_par * parasi_i[i] + eps_f[yr.n[i]]
     # Poisson likelihood model of productivity
     fled_i[i] ~ dzip(lam[i], theta_f)
     fled_i_sim[i] ~ dzip(lam[i], theta_f)
@@ -208,8 +184,8 @@ PVA <- nimbleCode({
   
   ##### IMMIGRATION MODEL #################################################################################
   # Priors
-  beta_om_int ~ dnorm(0, sd = 0.5)
-  beta_om_ddi ~ dnorm(0, sd = 0.25)
+  beta_om_int ~ dnorm(0, sd = 0.1)
+  beta_om_ddi ~ dnorm(0, sd = 0.1)
   sigma_ti ~ dgamma(16,40)
   
   for (t in 1:(n.occ + n.prj - 1)) {
@@ -217,9 +193,7 @@ PVA <- nimbleCode({
     
     for (s in 1:n.scn) {
       log(om[s,t]) <- 
-        beta_om_int + 
-        beta_om_ddi * ((log(N_tot[s,t] + idx[s, t]) - 5.21)/4.52) +
-        eps_ti[t]
+        beta_om_int + (beta_om_ddi * ((log(N_tot[s,t] + ext[s, t]) - 4.97)/0.56)) + eps_ti[t]
     }
   }
   
@@ -240,9 +214,9 @@ PVA <- nimbleCode({
   ##### PROJECTION SCENARIOS ##############################################################################
   # realized scenario
   for (t in 1:n.occ-1){
-    N_j[1,t+1] ~ dpois(pop_mat[1,t] * phi_j[t] * f[1,t]/2 * N_tot[1,t])
-    N_a[1,t+1] ~ dbin(pop_mat[1,t] * phi_a[t], N_tot[1,t])
-    N_i[1,t+1] ~ dpois(pop_mat[1,t] * om[1,t])
+    N_j[1,t+1] ~ dpois(phi_j[t] * f[1,t]/2 * N_tot[1,t])
+    N_a[1,t+1] ~ dbin(phi_a[t], N_tot[1,t])
+    N_i[1,t+1] ~ dpois(om[1,t])
   }
   # The past is the same for every future scenario
   for (t in 1:n.occ) {
@@ -253,11 +227,11 @@ PVA <- nimbleCode({
     }
   }
   # projection scenarios
-  for (t in n.occ:((n.occ)+n.prj-1)){
+  for (t in n.occ:(n.occ+n.prj-1)){
     for (s in 1:n.scn) {
-      N_j[s,t+1] ~ dpois(pop_mat[s,t] * phi_j[t] * f[s,t]/2 * N_tot[s,t])
-      N_a[s,t+1] ~ dbin(pop_mat[s,t] * phi_a[t], N_tot[s,t])
-      N_i[s,t+1] ~ dpois(pop_mat[s,t] * om[s,t])
+      N_j[s,t+1] ~ dpois(phi_j[t] * f[s,t]/2 * N_tot[s,t])
+      N_a[s,t+1] ~ dbin(phi_a[t] * srv_mat[s,t] , N_tot[s,t])
+      N_i[s,t+1] ~ dpois(om[s,t])
     }
   }
   
@@ -267,15 +241,14 @@ PVA <- nimbleCode({
     proj_gr[s] <- pow(N_tot[s,n.occ+n.prj] / N_tot[s,n.occ], 1/(n.prj-1))
     for (t in 1:(n.occ + n.prj - 1)){
       # has the population been extirpated? 1 = Yes ; 0 = No
-      idx[s,t] <- equals(N_tot[s, t], 0)
+      ext[s,t] <- equals(N_tot[s, t], 0)
       
-      annual_growth_rate[s,t] <- N_tot[s, t + 1] / (N_tot[s, t] + idx[s, t])
-      # irate[s,t] <- N_i[s, t+1] / (N_tot[s, t] + idx[s, t])
+      annual_growth_rate[s,t] <- N_tot[s, t + 1] / (N_tot[s, t] + ext[s, t])
     }
     for (t in 1:n.prj) {
-      # Pr_ext[s, t] <- (N_tot[s, (n.occ + t)] == 0)
-      # Pr_qext[s, t] <- (N_tot[s, (n.occ + t)] < 20)
-      # Pr_K[s, t] <- (N_tot[s, (n.occ + t)] > 1000)
+      Pr_ext[s, t] <- (N_tot[s, (n.occ + t)] == 0)
+      Pr_qext[s, t] <- (N_tot[s, (n.occ + t)] < 20)
+      Pr_K[s, t] <- (N_tot[s, (n.occ + t)] > 1000)
     }
   }
   
@@ -389,13 +362,12 @@ PVA <- nimbleCode({
 
 # Parameters monitored
 params <- c(
-  "beta_phij_int","phi_j","phij_bar","beta_phia_int","phi_a","phia_bar","beta_om_int","beta_om_ddi","theta_f",
-  "beta_f_int","beta_f_par","fbar","beta_pi_int","sigma_pi","pi","beta_p_int","beta_p_pas","sigma_p","p",
-  "sigma_ds","N_tot","annual_growth_rate","realized_gr","proj_gr","sigma_ta","sigma_tj","sigma_ti","sigma_tf",
-  "sen_omega","sen_alpha","sen_phij","sen_phia","sen_fer","ela_omega","ela_alpha","ela_phij","ela_phia",
-  "ela_fer","Bp_survey","R_srv_p","R_srv_r","Bp_CJS","R_cjs_p","R_cjs_r","Bp_fledge","R_fled_p","R_fled_r"
-  )
-# "irate","Pr_K","Pr_ext","Pr_qext"
+  "beta_phij_int","phi_j","phij_bar","beta_phia_int","phi_a","phia_bar","beta_om_int","beta_om_ddi","om",
+  "beta_f_int","beta_f_par","theta_f","fbar","beta_pi_int","sigma_pi","pi","beta_p_int","beta_p_pas",
+  "sigma_p","nu","sigma_nu","beta_nu_int","p","f","N_tot","sigma_ds","annual_growth_rate","realized_gr",
+  "Pr_ext","Pr_qext","Pr_K","proj_gr","sen_omega","sen_alpha","sen_phij","sen_phia","sen_fer","ela_omega",
+  "ela_alpha","ela_phij","ela_phia","ela_fer","Bp_survey","R_srv_p","R_srv_r","Bp_CJS","R_cjs_p","R_cjs_r",
+  "Bp_fledge","R_fled_p","R_fled_r","sigma_ta","sigma_tj","sigma_ti","sigma_tf")
 
 ### RUN MODEL ###############################################################################################
 
